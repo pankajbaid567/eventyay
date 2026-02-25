@@ -2173,12 +2173,20 @@ class OrderPosition(AbstractPosition):
         related_name='all_positions',
         on_delete=models.PROTECT,
     )
+    event = models.ForeignKey(
+        Event,
+        verbose_name=_('Event'),
+        related_name='order_positions',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+    )
     tax_rate = models.DecimalField(max_digits=7, decimal_places=2, verbose_name=_('Tax rate'))
     tax_rule = models.ForeignKey('TaxRule', on_delete=models.PROTECT, null=True, blank=True)
     tax_value = models.DecimalField(max_digits=10, decimal_places=2, verbose_name=_('Tax value'))
     secret = models.CharField(max_length=255, null=False, blank=False, db_index=True)
     web_secret = models.CharField(max_length=32, default=generate_secret, db_index=True)
-    pseudonymization_id = models.CharField(max_length=16, unique=True, db_index=True)
+    pseudonymization_id = models.CharField(max_length=16, db_index=True)
     canceled = models.BooleanField(default=False)
 
     all = ScopedManager(organizer='order__event__organizer')
@@ -2188,6 +2196,10 @@ class OrderPosition(AbstractPosition):
         verbose_name = _('Order position')
         verbose_name_plural = _('Order positions')
         ordering = ('positionid', 'id')
+        constraints = [
+            models.UniqueConstraint(fields=['event', 'pseudonymization_id'], name='orderposition_pseudo_id_event_unique'),
+            models.UniqueConstraint(fields=['event', 'secret'], name='orderposition_secret_event_unique'),
+        ]
 
     @cached_property
     def sort_key(self):
@@ -2220,7 +2232,7 @@ class OrderPosition(AbstractPosition):
         cp_mapping = {}
         # The sorting key ensures that all addons come directly after the position they refer to
         for i, cartpos in enumerate(sorted(cp, key=lambda c: (c.addon_to_id or c.pk, c.addon_to_id or 0))):
-            op = OrderPosition(order=order)
+            op = OrderPosition(order=order, event=order.event)
             for f in AbstractPosition._meta.fields:
                 if f.name == 'addon_to':
                     setattr(op, f.name, cp_mapping.get(cartpos.addon_to_id))
@@ -2282,6 +2294,9 @@ class OrderPosition(AbstractPosition):
     def save(self, *args, **kwargs):
         from eventyay.base.secrets import assign_ticket_secret
 
+        if not self.event_id and self.order_id:
+            self.event_id = self.order.event_id
+
         if self.tax_rate is None:
             self._calculate_tax()
 
@@ -2291,7 +2306,7 @@ class OrderPosition(AbstractPosition):
                 not self.secret
                 or OrderPosition.all.filter(
                     secret=self.secret,
-                    order__event=self.order.event,
+                    event_id=self.event_id,
                 ).exists()
             ):
                 assign_ticket_secret(
@@ -2316,7 +2331,7 @@ class OrderPosition(AbstractPosition):
         while True:
             code = get_random_string(length=10, allowed_chars=charset)
             with scopes_disabled():
-                if not OrderPosition.all.filter(pseudonymization_id=code).exists():
+                if not OrderPosition.all.filter(event_id=self.event_id, pseudonymization_id=code).exists():
                     self.pseudonymization_id = code
                     return
 

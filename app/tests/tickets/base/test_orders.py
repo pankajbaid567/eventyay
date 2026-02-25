@@ -3158,6 +3158,118 @@ def test_giftcard_test_mode_event(event):
 
 
 @pytest.mark.django_db
+def test_identical_ticket_secrets_cross_events(event):
+    from django.db import IntegrityError
+    ticket = Item.objects.create(
+        event=event,
+        name='Early-bird ticket',
+        default_price=Decimal('23.00'),
+        admission=True,
+    )
+    
+    event2 = Event.objects.create(
+        name='Other Event',
+        slug='otherevent',
+        organizer=event.organizer,
+        date_from=now(),
+        plugins='tests.testdummy',
+    )
+    ticket2 = Item.objects.create(
+        event=event2,
+        name='Other Event ticket',
+        default_price=Decimal('23.00'),
+        admission=True,
+    )
+
+    order1 = Order.objects.create(
+        code='FOO1',
+        event=event,
+        email='dummy@dummy.test',
+        status=Order.STATUS_PENDING,
+        datetime=now(),
+        expires=now() + timedelta(days=10),
+        total=0,
+    )
+
+    order2 = Order.objects.create(
+        code='FOO2',
+        event=event2,
+        email='dummy@dummy.test',
+        status=Order.STATUS_PENDING,
+        datetime=now(),
+        expires=now() + timedelta(days=10),
+        total=0,
+    )
+
+    op1 = OrderPosition.objects.create(
+        order=order1,
+        event=event,
+        item=ticket,
+        price=Decimal('23.00'),
+        positionid=1,
+    )
+    op1.pseudonymization_id = 'IDENTICAL123'
+    op1.secret = 'IDENTICAL_SECRET_123'
+    op1.save()
+
+    op2 = OrderPosition.objects.create(
+        order=order2,
+        event=event2,
+        item=ticket2,
+        price=Decimal('23.00'),
+        positionid=1,
+    )
+    op2.pseudonymization_id = 'IDENTICAL123'
+    op2.secret = 'IDENTICAL_SECRET_123'
+    op2.save()  # This should legitimately bypass DB integrity as they are cross-event
+
+    assert OrderPosition.all.filter(pseudonymization_id='IDENTICAL123').count() == 2
+
+
+@pytest.mark.django_db
+def test_identical_pseudonymization_ids_same_event_fail(event):
+    from django.db import IntegrityError
+    ticket = Item.objects.create(
+        event=event,
+        name='Early-bird ticket',
+        default_price=Decimal('23.00'),
+        admission=True,
+    )
+    order1 = Order.objects.create(
+        code='FOO1',
+        event=event,
+        email='dummy@dummy.test',
+        status=Order.STATUS_PENDING,
+        datetime=now(),
+        expires=now() + timedelta(days=10),
+        total=0,
+    )
+
+    op1 = OrderPosition.objects.create(
+        order=order1,
+        event=event,
+        item=ticket,
+        price=Decimal('23.00'),
+        positionid=1,
+    )
+    op1.pseudonymization_id = 'IDENTICAL123'
+    op1.secret = 'IDENTICAL_SECRET_123'
+    op1.save()
+
+    op2 = OrderPosition.objects.create(
+        order=order1,
+        event=event,
+        item=ticket,
+        price=Decimal('23.00'),
+        positionid=2,
+    )
+    op2.pseudonymization_id = 'IDENTICAL123'
+    op2.secret = 'NEW_SECRET_123'
+    with pytest.raises(IntegrityError):
+        op2.save()
+
+
+@pytest.mark.django_db
 def test_giftcard_swap(event):
     ticket = Item.objects.create(
         event=event,
